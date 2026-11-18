@@ -1,0 +1,83 @@
+# Alerting rules. Prometheus evaluates them continuously; a rule that stays true for `for:` fires and
+# is sent to Alertmanager, which groups, de-duplicates and routes it (here: to notification-service).
+#
+# Good alerts are about SYMPTOMS users feel (errors, latency, stuck orders), not every internal blip.
+# Each has a severity and a summary that tells the on-call engineer where to look first.
+groups:
+  - name: shopflow-availability
+    rules:
+      - alert: ServiceInstanceDown
+        expr: up{application!=""} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.application }} instance {{ $labels.instance }} is not responding to scrapes"
+
+      - alert: HighHttpErrorRate
+        # share of requests answered with 5xx over the last 5 minutes, per service
+        expr: |
+          sum by (application) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            / sum by (application) (rate(http_server_requests_seconds_count[5m])) > 0.05
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.application }}: more than 5% of requests fail ({{ $value | humanizePercentage }})"
+
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, application) (rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m]))) > 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.application }}: p95 latency above 1s ({{ $value | humanizeDuration }})"
+
+      - alert: CircuitBreakerOpen
+        expr: max by (application, name) (resilience4j_circuitbreaker_state{state="open"}) == 1
+        for: 30s
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.application }}: circuit breaker '{{ $labels.name }}' is OPEN - a dependency is failing"
+
+  - name: shopflow-messaging
+    rules:
+      - alert: OutboxBacklogGrowing
+        expr: max by (application) (shopflow_outbox_pending) > 50
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.application }}: {{ $value }} events stuck in the outbox - is Kafka reachable?"
+
+      - alert: KafkaConsumerLagHigh
+        expr: max by (application) (kafka_consumer_fetch_manager_records_lag_max) > 100
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.application }} is falling behind on Kafka ({{ $value }} records lag)"
+
+      - alert: DeadLetterMessages
+        expr: sum by (application, topic) (increase(shopflow_dlt_messages_total[10m])) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Messages reached dead-letter topic {{ $labels.topic }} - investigate and replay"
+
+  - name: shopflow-business
+    rules:
+      - alert: OrderCancellationSpike
+        # A business-level SLO: normally most orders confirm. Many cancellations = something upstream is wrong.
+        expr: |
+          sum(increase(shopflow_orders_total{status="cancelled"}[15m]))
+            / clamp_min(sum(increase(shopflow_orders_total{status="created"}[15m])), 1) > 0.5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "More than half of recent orders were cancelled"
+
+      - alert: JvmHeapPressure
+        expr: |
+          max by (application, instance) (jvm_memory_used_bytes{area="heap"})
+            / max by (application, instance) (jvm_memory_max_bytes{area="heap"} > 0) > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.application }} {{ $labels.instance }} heap above 90%"

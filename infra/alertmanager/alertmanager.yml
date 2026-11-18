@@ -1,0 +1,24 @@
+# Alertmanager decides WHO gets notified, HOW, and how often.
+route:
+  receiver: shopflow-oncall
+  group_by: [alertname, application]   # one notification per alert+service, not per replica
+  group_wait: 10s                        # wait a bit to batch related alerts together
+  group_interval: 1m
+  repeat_interval: 1h                    # re-notify while still firing
+  routes:
+    - matchers: [ 'severity="critical"' ]
+      receiver: shopflow-oncall
+      repeat_interval: 15m
+
+receivers:
+  - name: shopflow-oncall
+    webhook_configs:
+      # Stand-in for PagerDuty / Opsgenie / Slack / Teams: notification-service logs each alert.
+      - url: http://notification-service:8085/internal/alerts
+        send_resolved: true
+
+inhibit_rules:
+  # If an instance is down, don't also page for its error rate.
+  - source_matchers: [ 'alertname="ServiceInstanceDown"' ]
+    target_matchers: [ 'alertname="HighHttpErrorRate"' ]
+    equal: [application]
