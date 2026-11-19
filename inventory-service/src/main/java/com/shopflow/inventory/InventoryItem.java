@@ -68,6 +68,10 @@ public class InventoryItem {
         return sku;
     }
 
+    public int getQuantity() {
+        return available + reserved;
+    }
+
     public int getAvailable() {
         return available;
     }
