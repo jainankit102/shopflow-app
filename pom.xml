@@ -39,6 +39,7 @@
 	<modules>
 		<module>shopflow-common</module>
 		<module>catalog-service</module>
+		<module>inventory-service</module>
 	</modules>
 
 	<dependencyManagement>
